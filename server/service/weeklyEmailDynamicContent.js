@@ -5,6 +5,8 @@ require('dotenv').config();
 const BENEFIT_TYPES = require('../static/benefit_type');
 const MAX_JOBPOSTING_PER_COMPANY = 10;
 const NUMBER_OF_COMPANIES_TO_PICK = 3;
+const TESTMODE = false;
+const POSTED_DATE_COND   = TESTMODE? `and jobposting.posted_date >= (select posted_date from jobposting order by posted_date desc limit 1) - interval '5 day'`:`and jobposting.posted_date >= NOW() - interval '7 day'`;
 /**
  * Pick top three companies that have most jobpostings this week
  * and calculate their respective counts of jobpostings in each location( no longer vaild on 10/15/2022, only USA is a valid location)
@@ -67,7 +69,7 @@ const NUMBER_OF_COMPANIES_TO_PICK = 3;
                        SELECT benefit.company_name , array_agg(benefit.benefit_type) as benefit_type_array
                        FROM benefit where benefit."deletedAt" is null group by benefit.company_name
             ) as benefitInfo join jobposting on benefitInfo.company_name = jobposting.company_name
-            where jobposting."deletedAt" is null and jobposting.posted_date >= NOW() - interval '7 day'  ${SQLBenefitCond}
+            where jobposting."deletedAt" is null ${POSTED_DATE_COND}  ${SQLBenefitCond}
             group by jobposting.company_name, benefitInfo.benefit_type_array order by count desc limit ${NUMBER_OF_COMPANIES_TO_PICK}
         ) as JPcount LEFT JOIN company on company.company_name = JPcount.company_name`);
 
@@ -83,7 +85,7 @@ const NUMBER_OF_COMPANIES_TO_PICK = 3;
         // exclude soft-deleted entries
         const countingPerLoc = await Promise.all(threeCompanies[0].map(async (company, index) => {
             const eachJobcounting = await sequelize.query(`SELECT mode() WITHIN GROUP(ORDER BY jobposting.normalized_job_location), COUNT(*) from jobposting 
-            WHERE jobposting.company_name = '${company.company_name}' and "deletedAt" is null and jobposting.posted_date >= NOW() - interval '7 day' group by jobposting.normalized_job_location`);
+            WHERE jobposting.company_name = $$${company.company_name}$$ and "deletedAt" is null ${POSTED_DATE_COND} group by jobposting.normalized_job_location`);
             // each elem of eachJobcounting : [ { mode: 'USA', count: '470' }, { mode: 'CANADA', count: '372' } ]
             // console.log(eachJobcounting[0]);
             // reduce
@@ -188,8 +190,8 @@ const fetchJobPostingInformation = async (companyInfo) => {
 
                 randNumSets.push(randNumSet);
                 // exclude soft-deleted jobpostins and jobpostings generated more than a week ago
-                const result = await sequelize.query(`select * from jobposting where jobposting.company_name='${singleCompanyInfo.company_name}' 
-                and jobposting.normalized_job_location= '${singleLoc}' and "deletedAt" is null and jobposting.posted_date >= NOW() - interval '7 day' `);
+                const result = await sequelize.query(`select * from jobposting where jobposting.company_name=$$${singleCompanyInfo.company_name}$$
+                and jobposting.normalized_job_location= '${singleLoc}' and "deletedAt" is null ${POSTED_DATE_COND} `);
 
                 // Push selected jobpostings with the randomly generated indices among the total query result from DB 
                 for (index of randNumSet) {
@@ -296,12 +298,12 @@ const charEncodingInHTML = (comInfoWithJPs) => {
  * Organize the text containing three companys' infomation and their jobpostings 
  * and encode it to its HTML equivalent to embed it to the weekly email 
  * @param {String} benefit_type : one of the benfit types => ['student_loan_repayment', 'tuition_assistance', 'tuition_reimbursement', 'full_tuition_coverage']
- *                   If arg is empty string, it will pick
+ *                   If arg is empty string, it will pick three companies that actively posted job advertisement for the last 7 days
  * @returns {String} : String with HTML TAGs 
  */
 const dyanmicConentBuilder = async (benefit_type) => {
     try {
-        logger.info(`[weeklyEmailDynamicContent] dyanmicConentBuilder : started!`);
+        logger.info(`[weeklyEmailDynamicContent] dyanmicConentBuilder : ${benefit_type} started!`);
         let companyInfo = await fetchCompanyInformation(benefit_type);
 
         // console.log(companyInfo);
@@ -322,6 +324,24 @@ const dyanmicConentBuilder = async (benefit_type) => {
 module.exports = {
     dyanmicConentBuilder
 };
+
+
+/* Error detection test */
+/*
+10/18/2022 while processing "Lowe's"
+"SequelizeDatabaseError: syntax error at or near "s""
+full_tuition_coverage
+
+To facilitate the test, please keep in mind that TESTMODE variable should be true
+
+*/
+// (async() => {
+
+//     const result = await dyanmicConentBuilder('full_tuition_coverage');
+//     logger.info("[test result]");
+//     logger.info(result);
+// })();
+
 
 /*
 const weeklyEmailJobpostingPull = async() => {
